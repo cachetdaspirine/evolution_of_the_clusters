@@ -46,7 +46,49 @@ def cluster_points(points, max_distance):
             clusters.append(new_cluster)
 
     return [np.array(cluster) for cluster in clusters]
+
+def compute_mean_distance_between_clusters(clusters):
+    """Compute the mean distance between cluster centroids."""
+    if len(clusters) < 2:  # If there's one or no cluster, mean distance isn't applicable
+        return np.nan
+    centroids = [np.mean(cluster, axis=0) for cluster in clusters] # center of the cluster
+    pairwise_distances = distance_matrix(centroids, centroids)
+    np.fill_diagonal(pairwise_distances, np.nan)  # Ignore self-distances
+    mean_distance = np.nanmean(pairwise_distances)
+    return mean_distance
+def compute_av_cluster_size_and_mean_distance(gillespie, output, step_tot, check_steps, max_distance):
+    """Extended function to also compute mean distance between clusters."""
+    metrics_time = np.zeros((step_tot // check_steps, 3), dtype=float)  # Adjusted for an extra column
+    current_time = 0.
+    clusters = cluster_points(gillespie.get_R(), max_distance)
+    prev_c_size = np.mean([len(c) for c in clusters])
+    prev_mean_distance = compute_mean_distance_between_clusters(clusters)
     
+    for i in range(step_tot // check_steps):
+        t_tot = 0.
+        av_c_size = 0.
+        total_mean_distance = 0.
+        
+        for t in range(check_steps):
+            move, time = gillespie.evolve()
+            current_time += time[0]
+            t_tot += time[0]
+            
+            clusters = cluster_points(gillespie.get_R(), max_distance)
+            c_size = np.mean([len(c) for c in clusters])
+            mean_distance = compute_mean_distance_between_clusters(clusters)
+            
+            av_c_size += prev_c_size * time[0]
+            total_mean_distance += prev_mean_distance * time[0] if not np.isnan(prev_mean_distance) else 0
+            
+            prev_c_size = c_size
+            prev_mean_distance = mean_distance
+        
+        av_c_size /= t_tot
+        mean_distance_avg = total_mean_distance / t_tot if t_tot != 0 else np.nan
+        metrics_time[i] = [current_time, av_c_size, mean_distance_avg]
+    
+    output.put(('create_array', ('/', 'metrics_' + hex(gillespie.seed), metrics_time)))
 def compute_av_cluster_size(gillespie,output,step_tot,check_steps,max_distance):
     c_size_time = np.zeros((step_tot//check_steps,2),dtype=float)
     current_time = 0.
@@ -92,11 +134,10 @@ def  Run(inqueue,output,step_tot,check_steps,max_distance):
         # create the system
         gillespie = gil.Gillespie(ell_tot=ell_tot, rho0=0., BindingEnergy=Energy, kdiff=kdiff,
                             seed=seed, sliding=False, Nlinker=Nlinker, old_gillespie=None, dimension=dimension)
-        # pass it as an argument, R returns an array of size (step_tot//check_steps,Nlinker+2,3)
-        #output.put(('create_group',('/','bin_hist_'+hex(seed))))
-        #Compute_Pair_Correlation_Function(gillespie,output,'bin_hist_'+hex(seed),step_tot,check_steps,num_bins,max_distance,linked)
-        compute_av_cluster_size(gillespie,output,step_tot,check_steps,max_distance)
-        #output.put(('create_array',('/',"R_"+hex(seed),R)))
+        
+        compute_av_cluster_size_and_mean_distance(gillespie,output,step_tot,check_steps,max_distance)
+        #compute_av_cluster_size(gillespie,output,step_tot,check_steps,max_distance)
+        
 
 def handle_output(output,filename,header):
     """
